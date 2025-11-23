@@ -201,7 +201,8 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_fputest_quick\
 	$U/_fputest\
-        $U/_sha256
+    $U/_sha256\
+	$U/_udp_client
 #	$U/_test_math\
 #	$U/_xv6_strings\
 #	$U/_tests_stdlib\
