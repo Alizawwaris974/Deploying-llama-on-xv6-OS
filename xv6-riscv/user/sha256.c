@@ -164,6 +164,7 @@ void sha256_hash(const unsigned char *data, unsigned int len, unsigned char hash
     sha256_final(&ctx, hash);
 }
 
+#ifndef SHA256_LIB
 // Helper function to print hash in hex format
 static void print_hash(const char *label, const unsigned char hash[32]) {
     printf("%s: ", label);
@@ -287,3 +288,4 @@ int main(int argc, char *argv[]) {
     run_tests();
     exit(0);
 }
+#endif

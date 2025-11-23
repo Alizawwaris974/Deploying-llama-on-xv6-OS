@@ -153,6 +153,15 @@ ifeq ($(LAB),lock)
 ULIB += $U/statistics.o
 endif
 
+# 1. Compile a library version of sha256 (Defines SHA256_LIB to remove main)
+$U/sha256_lib.o: $U/sha256.c
+	$(CC) $(CFLAGS) -DSHA256_LIB -c -o $U/sha256_lib.o $U/sha256.c
+
+# 2. Link udp_client with the library version
+$U/_udp_client: $U/udp_client.o $U/sha256_lib.o $(ULIB)
+	$(LD) $(LDFLAGS) -T $U/user.ld -o $U/_udp_client $U/udp_client.o $U/sha256_lib.o $(ULIB)
+	$(OBJDUMP) -S $U/_udp_client > $U/udp_client.asm
+
 _%: %.o $(ULIB) $U/user.ld
 	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $< $(ULIB)
 	$(OBJDUMP) -S $@ > $*.asm
@@ -201,7 +210,7 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_fputest_quick\
 	$U/_fputest\
-    $U/_sha256\
+        $U/_sha256\
 	$U/_udp_client
 #	$U/_test_math\
 #	$U/_xv6_strings\
