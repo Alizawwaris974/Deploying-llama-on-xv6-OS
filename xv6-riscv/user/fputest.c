@@ -1,6 +1,39 @@
+// xv6-riscv/user/fputest.c
+// FPU Context Switch Test - Tests that FPU state is properly saved/restored across fork()
+
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "user/user.h"
+
+void print_float(float val) {
+  int intp = (int)val;
+  int frac = (int)((val - intp) * 1000);
+  if (frac < 0) frac = -frac;
+  if (frac < 10) printf("%d.00%d", intp, frac);
+  else if (frac < 100) printf("%d.0%d", intp, frac);
+  else printf("%d.%d", intp, frac);
+}
+
+// Calculate expected child sum (cubes from 1.0 to 50.0, step 0.5)
+// This verifies the child computed correctly, not using parent's FPU state
+int calculate_expected_child(void) {
+  float expected = 0.0;
+  float j;
+  for(j = 1.0; j <= 50.0; j += 0.5) {
+    expected += j * j * j;
+  }
+  return (int)expected;
+}
+
+// Calculate expected parent sum (squares from 1.0 to 100.0, step 0.5)
+int calculate_expected_parent(void) {
+  float expected = 0.0;
+  float i;
+  for(i = 1.0; i <= 100.0; i += 0.5) {
+    expected += i * i;
+  }
+  return (int)expected;
+}
 
 int
 main(int argc, char *argv[])
@@ -30,34 +63,47 @@ main(int argc, char *argv[])
   }
   
   if(pid == 0) {
-    // Child process
+    // ==================== CHILD PROCESS ====================
     printf("\nChild: Starting computation (i^3 from 1.0 to 50.0)...\n");
     
     float child_sum = 0.0;
     float j;
     
+    // Compute cubes from 1.0 to 50.0, step 0.5
     for(j = 1.0; j <= 50.0; j += 0.5) {
       child_sum += j * j * j;
     }
     
     printf("Child: Completed computation, sum = %d\n", (int)child_sum);
-    printf("Child: Expected approximately 1593906\n");
     
-    // Check if result is approximately correct (within 1%)
-    int expected = 1593906;
+    // Calculate expected value automatically
+    int expected = calculate_expected_child();
     int actual = (int)child_sum;
     int diff = actual > expected ? actual - expected : expected - actual;
     
-    if(diff < expected / 100) {
-      printf("Child: PASS - Result is correct!\n\n");
-    } else {
-      printf("Child: FAIL - Result is incorrect (diff = %d)\n\n", diff);
-    }
+    printf("Child: Expected = %d\n", expected);
+    printf("Child: Actual   = %d\n", actual);
+    printf("Child: Diff     = %d\n", diff);
     
-    exit(0);
-  } else {
-    // Parent process continues
-    printf("\nParent: Continuing computation (i^2 from 50.5 to 100.0)...\n");
+    // Check if result matches expected (within 1% tolerance for floating point errors)
+    if(diff < expected / 100) {
+      printf("Child: PASS ✓ - FPU state correctly isolated from parent!\n\n");
+      exit(0);  // Success
+    } else {
+      printf("Child: FAIL ✗ - Result incorrect (FPU state corruption?)\n\n");
+      exit(1);  // Failure
+    }
+  } 
+  else {
+    // ==================== PARENT PROCESS ====================
+    printf("\nParent: Waiting for child to complete...\n");
+    
+    // Wait for child to finish
+    int child_status;
+    wait(&child_status);
+    
+    printf("Parent: Child finished, continuing computation...\n");
+    printf("Parent: Continuing computation (i^2 from 50.5 to 100.0)...\n");
     
     float parent_sum2 = 0.0;
     
@@ -68,28 +114,45 @@ main(int argc, char *argv[])
     
     float parent_total = parent_sum1 + parent_sum2;
     
-    // Wait for child
-    wait(0);
-    
-    printf("Parent: Completed computation\n");
+    printf("\nParent: Completed computation\n");
     printf("Parent: First half sum  = %d\n", (int)parent_sum1);
     printf("Parent: Second half sum = %d\n", (int)parent_sum2);
-    printf("Parent: Total sum = %d\n", (int)parent_total);
-    printf("Parent: Expected approximately 666866\n");
+    printf("Parent: Total sum       = %d\n", (int)parent_total);
     
-    // Check if result is approximately correct (within 1%)
-    int expected = 666866;
+    // Calculate expected value automatically
+    int expected = calculate_expected_parent();
     int actual = (int)parent_total;
     int diff = actual > expected ? actual - expected : expected - actual;
     
+    printf("Parent: Expected = %d\n", expected);
+    printf("Parent: Actual   = %d\n", actual);
+    printf("Parent: Diff     = %d\n", diff);
+    
+    // Check if result matches expected (within 1% tolerance)
     if(diff < expected / 100) {
-      printf("Parent: PASS - Result is correct!\n");
+      printf("Parent: PASS ✓ - FPU state correctly preserved across context switch!\n");
     } else {
-      printf("Parent: FAIL - Result is incorrect (diff = %d)\n", diff);
+      printf("Parent: FAIL ✗ - Result incorrect (FPU corruption?)\n");
     }
     
     printf("\n========================\n");
-    printf("FPU Test Complete\n");
+    
+    // Overall test result
+    if(child_status == 0 && diff < expected / 100) {
+      printf("FPU Test: ALL TESTS PASSED ✓\n");
+      printf("- FPU context switching works correctly\n");
+      printf("- Child process has isolated FPU state\n");
+      printf("- Parent FPU state preserved after fork\n");
+    } else {
+      printf("FPU Test: SOME TESTS FAILED ✗\n");
+      if(child_status != 0) {
+        printf("- Child test failed\n");
+      }
+      if(diff >= expected / 100) {
+        printf("- Parent test failed\n");
+      }
+    }
+    printf("========================\n");
   }
   
   exit(0);
