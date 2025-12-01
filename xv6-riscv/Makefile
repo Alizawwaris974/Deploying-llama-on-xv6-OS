@@ -147,7 +147,7 @@ $K/%.o: $K/%.S
 tags: $(OBJS)
 	etags kernel/*.S kernel/*.c
 
-ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o $U/xv6_stdlib.o
+ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o $U/xv6_stdlib.o $U/xv6_strings.o $U/xv6_math.o
 
 ifeq ($(LAB),lock)
 ULIB += $U/statistics.o
@@ -161,6 +161,10 @@ $U/sha256_lib.o: $U/sha256.c
 $U/_udp_client: $U/udp_client.o $U/sha256_lib.o $(ULIB)
 	$(LD) $(LDFLAGS) -T $U/user.ld -o $U/_udp_client $U/udp_client.o $U/sha256_lib.o $(ULIB)
 	$(OBJDUMP) -S $U/_udp_client > $U/udp_client.asm
+
+$U/_test_runner: $U/test_runner.o $U/test_math.o $U/test_string.o $U/test_stdlib.o $(ULIB)
+	$(LD) $(LDFLAGS) -T $U/user.ld -o $U/_test_runner $U/test_runner.o $U/test_math.o $U/test_string.o $U/test_stdlib.o $(ULIB)
+	$(OBJDUMP) -S $U/_test_runner > $U/test_runner.asm
 
 _%: %.o $(ULIB) $U/user.ld
 	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $< $(ULIB)
@@ -176,7 +180,7 @@ $U/usys.o : $U/usys.S
 $U/_forktest: $U/forktest.o $(ULIB)
 	# forktest has less library code linked in - needs to be small
 	# in order to be able to max out the proc table.
-	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $U/_forktest $U/forktest.o $U/ulib.o $U/usys.o
+	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $U/_forktest $U/forktest.o $U/ulib.o $U/usys.o $U/xv6_strings.o
 	$(OBJDUMP) -S $U/_forktest > $U/forktest.asm
 
 mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
@@ -211,7 +215,8 @@ UPROGS=\
 	$U/_fputest_quick\
 	$U/_fputest\
         $U/_sha256\
-	$U/_udp_client
+	$U/_udp_client\
+	$U/_test_runner
 #	$U/_test_math\
 #	$U/_xv6_strings\
 #	$U/_tests_stdlib\

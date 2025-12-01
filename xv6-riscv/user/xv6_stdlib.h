@@ -11,6 +11,7 @@ float xv6_atof(const char* str);
 #define calloc xv6_calloc
 #define bsearch xv6_bsearch
 #define qsort xv6_qsort
-
+#define atoi xv6_atoi
+#define atof xv6_atof
 
 #endif

@@ -1,6 +1,6 @@
-#ifdef LAB_MMAP
 typedef unsigned long size_t;
 typedef long int off_t;
+#ifdef LAB_MMAP
 #endif
 
 #define SBRK_ERROR ((char *)-1)
@@ -50,11 +50,11 @@ void *memmove(void*, const void*, int);
 char* strchr(const char*, char c);
 int strcmp(const char*, const char*);
 char* gets(char*, int max);
-uint strlen(const char*);
-void* memset(void*, int, uint);
+size_t strlen(const char*);
+void* memset(void*, int, size_t);
 int atoi(const char*);
 int memcmp(const void *, const void *, uint);
-void *memcpy(void *, const void *, uint);
+void *memcpy(void *, const void *, size_t);
 char* sbrk(int);
 char* sbrklazy(int);
 #ifdef LAB_LOCK

@@ -8,6 +8,10 @@
 #include <stdarg.h>
 #include <stddef.h>
 
+#ifndef INT_MAX
+#define INT_MAX 2147483647
+#endif
+
 /* ---------------- basic memory/string helpers ---------------- */
 
 void *memcpy(void *dest, const void *src, size_t n){
@@ -277,7 +281,6 @@ static const char *parse_int(const char *s, int *out){
 /* parse float - very simple: handles optional sign, digits, optional '.' fraction, optional exponent e/E */
 static const char *parse_float(const char *s, double *out){
     s = skip_ws(s);
-    const char *start = s;
     int neg = 0;
     if(*s == '+' || *s == '-'){ if(*s=='-') neg=1; s++; }
     double val = 0.0;
@@ -321,19 +324,22 @@ static const char *parse_string(const char *s, char *out, size_t outcap){
 }
 
 /*
- xv6_sscanf:
+ xv6_vsscanf:
   limited: supports %d, %f, %s, %c in format string.
   returns number of items successfully assigned.
 */
-int xv6_sscanf(const char *s, const char *fmt, ...){
-    va_list ap;
-    va_start(ap, fmt);
+int xv6_vsscanf(const char *s, const char *fmt, va_list ap){
     int assigned = 0;
     const char *p = fmt;
     while(*p){
-        if(isspace((unsigned char)*p)){ p++; continue; } /* skip spaces in format */
+        if(isspace((unsigned char)*p)){ 
+            s = skip_ws(s);
+            p++; 
+            continue; 
+        } /* skip spaces in format AND input */
         if(*p != '%'){
             /* literal match */
+            s = skip_ws(s);
             if(*s == *p){ s++; p++; continue; }
             else break;
         }
@@ -345,19 +351,28 @@ int xv6_sscanf(const char *s, const char *fmt, ...){
             if(nx == NULL) break;
             assigned++; s = nx;
         } else if(spec == 'f'){
-            double *out = va_arg(ap, double*);
-            const char *nx = parse_float(s, out);
+            float *out = va_arg(ap, float*);
+            double dval;
+            const char *nx = parse_float(s, &dval);
             if(nx == NULL) break;
+            *out = (float)dval;
             assigned++; s = nx;
         } else if(spec == 's'){
             char *out = va_arg(ap, char*);
-            size_t cap = va_arg(ap, size_t); /* we expect caller passes capacity after pointer */
-            const char *nx = parse_string(s, out, cap);
+            /* Note: standard sscanf doesn't take capacity, but our previous xv6_sscanf did.
+               For compatibility with standard sscanf, we should probably NOT expect capacity.
+               However, to be safe, let's assume standard behavior (no capacity arg) for %s 
+               unless we want to keep the custom behavior. 
+               The prompt asked for standard library functions. Standard sscanf %s is unsafe.
+               Let's assume standard behavior for now to match `sscanf` signature.
+            */
+            const char *nx = parse_string(s, out, 99999); /* unsafe but standard-like */
             if(nx == NULL) break;
             assigned++; s = nx;
         } else if(spec == 'c'){
             char *out = va_arg(ap, char*);
-            s = skip_ws(s);
+            /* sscanf %c does NOT skip whitespace by default */
+            /* But if format had space before %c, we already skipped whitespace in the loop above */
             if(!*s) break;
             *out = *s; assigned++; s++;
         } else {
@@ -365,20 +380,23 @@ int xv6_sscanf(const char *s, const char *fmt, ...){
             break;
         }
     }
-    va_end(ap);
     return assigned;
+}
+
+int xv6_sscanf(const char *s, const char *fmt, ...){
+    va_list ap;
+    va_start(ap, fmt);
+    int r = xv6_vsscanf(s, fmt, ap);
+    va_end(ap);
+    return r;
 }
 
 /* For compatibility, provide plain name */
 int sscanf(const char *s, const char *fmt, ...){
-    /* wrapper to call xv6_sscanf with va_list - but our xv6_sscanf uses va_list already expecting varargs */
     va_list ap;
     va_start(ap, fmt);
-    /* We cannot forward variable args easily here since xv6_sscanf expects normal varargs, so reconstructing is complex.
-       Instead: implement simple loop copying arguments is not possible; therefore call xv6_sscanf by extracting arguments not possible.
-       To keep simple, implement a small adapter that assumes caller will call xv6_sscanf directly.
-    */
+    int r = xv6_vsscanf(s, fmt, ap);
     va_end(ap);
-    return 0;
+    return r;
 }
 

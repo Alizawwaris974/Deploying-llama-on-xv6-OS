@@ -17,6 +17,7 @@ start(int argc, char **argv)
   exit(r);
 }
 
+/*
 char*
 strcpy(char *s, const char *t)
 {
@@ -27,7 +28,9 @@ strcpy(char *s, const char *t)
     ;
   return os;
 }
+*/
 
+/*
 int
 strcmp(const char *p, const char *q)
 {
@@ -35,7 +38,9 @@ strcmp(const char *p, const char *q)
     p++, q++;
   return (uchar)*p - (uchar)*q;
 }
+*/
 
+/*
 uint
 strlen(const char *s)
 {
@@ -45,7 +50,9 @@ strlen(const char *s)
     ;
   return n;
 }
+*/
 
+/*
 void*
 memset(void *dst, int c, uint n)
 {
@@ -56,6 +63,7 @@ memset(void *dst, int c, uint n)
   }
   return dst;
 }
+*/
 
 char*
 strchr(const char *s, char c)
@@ -143,11 +151,13 @@ memcmp(const void *s1, const void *s2, uint n)
   return 0;
 }
 
+/*
 void *
 memcpy(void *dst, const void *src, uint n)
 {
   return memmove(dst, src, n);
 }
+*/
 
 char *
 sbrk(int n) {

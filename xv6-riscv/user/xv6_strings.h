@@ -16,7 +16,10 @@ int xv6_snprintf(char *out, size_t n, const char *fmt, ...);
 int sprintf(char *out, const char *fmt, ...); /* override libc name intentionally if needed */
 
 /* Simple sscanf supporting %d %f %s %c */
+/* Simple sscanf supporting %d %f %s %c */
+int xv6_vsscanf(const char *s, const char *fmt, va_list ap);
 int xv6_sscanf(const char *s, const char *fmt, ...);
+int sscanf(const char *s, const char *fmt, ...);
 
 /* character classification */
 int isprint(int c);
