@@ -1,0 +1,71 @@
+=== TEST RUN T1 ===
+Prompt: "Once upon a time"
+Prompt Tokens: 5
+Output Tokens: 46
+Temperature: 0.000000
+Seed: 12345
+PRIMARY METRICS:
+TTFT: 17265074 cycles (1.726507 seconds)
+TPS: 2.787491 tokens/sec
+End-to-End: 178700572 cycles (17.870058 seconds)
+HOTSPOT BREAKDOWN (% of inference time):
+matmul(): 95.02%
+Activations (expf, sqrtf): 0.74%
+Attention: 15.90%
+FFN: 26.60%
+Sampling: 0.10%
+NOTES: Baseline run. High matmul dominance.
+
+=== TEST RUN T2 ===
+Prompt: "Once upon a time"
+Prompt Tokens: 5
+Output Tokens: 96
+Temperature: 0.000000
+Seed: 12345
+PRIMARY METRICS:
+TTFT: 24285580 cycles (2.428558 seconds)
+TPS: 2.671477 tokens/sec
+End-to-End: 379894031 cycles (37.989402 seconds)
+HOTSPOT BREAKDOWN (% of inference time):
+matmul(): 94.44%
+Activations (expf, sqrtf): 0.85%
+Attention: 16.41%
+FFN: 26.23%
+Sampling: 0.10%
+NOTES: Output scaling. TPS drops slightly as context grows.
+
+=== TEST RUN T3 ===
+Prompt: "The tiny dragon was very sad. He wanted to fly, but his wings were too small. I wish I could fly like the big dragons, he climbed the highest mountain to practice."
+Prompt Tokens: 41
+Output Tokens: 10
+Temperature: 0.000000
+Seed: 18786734
+PRIMARY METRICS:
+TTFT: 142338590 cycles (14.233859 seconds)
+TPS: 2.855633 tokens/sec
+End-to-End: 173855244 cycles (17.385524 seconds)
+HOTSPOT BREAKDOWN (% of inference time):
+matmul(): 95.22%
+Activations (expf, sqrtf): 0.75%
+Attention: 15.44%
+FFN: 25.97%
+Sampling: 0.02%
+NOTES: Prompt scaling. TTFT increases significantly due to prefill.
+
+=== TEST RUN T4 ===
+Prompt: "The tiny dragon was very sad. He wanted to fly, but his wings were too small. I wish I could fly like the big dragons, he said. One day, he climbed the highest mountain to practice."
+Prompt Tokens: 47
+Output Tokens: 54
+Temperature: 0.000000
+Seed: 12345
+PRIMARY METRICS:
+TTFT: 165814488 cycles (16.581449 seconds)
+TPS: 2.763156 tokens/sec
+End-to-End: 357624131 cycles (35.762413 seconds)
+HOTSPOT BREAKDOWN (% of inference time):
+matmul(): 94.42%
+Activations (expf, sqrtf): 0.83%
+Attention: 16.29%
+FFN: 26.04%
+Sampling: 0.06%
+NOTES: Combined load. Consistent performance characteristics.

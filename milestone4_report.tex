@@ -1,0 +1,192 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{graphicx}
+\usepackage{hyperref}
+
+\geometry{margin=1in}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+
+\lstset{style=mystyle}
+
+\title{Milestone 4 Report: Porting llama2.c to xv6}
+\author{OS Fall 2025 Project Interstellar}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Integration Strategy}
+
+\subsection{Integration Approach}
+The integration of \texttt{llama2.c} into xv6 involved porting the inference engine to run as a user-space program. Due to xv6's limited standard library and file system constraints, we adopted a hybrid approach:
+\begin{enumerate}
+    \item \textbf{Network-based Loading}: Instead of reading the 60MB model file from the xv6 file system (which is slow and size-constrained), we implemented a UDP client to fetch model weights and tokenizer data chunk-by-chunk from a host server.
+    \item \textbf{Standard Library Emulation}: We replaced missing C standard library functions (e.g., \texttt{fseek}, \texttt{ftell}, \texttt{mmap}, \texttt{time}) with xv6 equivalents or custom implementations.
+    \item \textbf{Hardware Acceleration}: We utilized RISC-V specific instructions (\texttt{rdtime}) for high-precision timing to measure token generation speed.
+\end{enumerate}
+
+\subsection{Modified Functions}
+Key functions modified from the original \texttt{llama2.c}:
+\begin{itemize}
+    \item \textbf{\texttt{main}}: Completely rewritten to handle xv6 command-line arguments (which lack sophisticated parsing) and to initialize the network fetch process.
+    \item \textbf{\texttt{read\_checkpoint}}: Refactored to use \texttt{fetch\_model\_weights} (UDP) instead of \texttt{fopen}/\texttt{fread}/\texttt{mmap}.
+    \item \textbf{\texttt{build\_tokenizer}}: Refactored to use \texttt{fetch\_tokenizer} (UDP) instead of file I/O.
+    \item \textbf{\texttt{time\_in\_ms}}: Modified to use the \texttt{rdcycle} (mapped to \texttt{rdtime}) system call for timing.
+    \item \textbf{\texttt{error\_usage}}: Updated to reflect the simplified usage in xv6.
+\end{itemize}
+
+\subsection{Memory Management Changes}
+The original \texttt{llama2.c} used \texttt{mmap} to map the model file into memory. xv6 does not support \texttt{mmap}.
+
+\textbf{Change}: We replaced \texttt{mmap} with \texttt{malloc}.
+\begin{enumerate}
+    \item \textbf{Allocation}: We allocate a contiguous block of memory using \texttt{malloc} (backed by \texttt{sbrk} in xv6) large enough to hold the model parameters.
+    \item \textbf{Loading}: We implemented \texttt{fetch\_model\_weights} which receives UDP packets and copies the data directly into this allocated memory buffer.
+\end{enumerate}
+
+\subsubsection{Code Snippet: Updated \texttt{read\_checkpoint} (Network Fetch)}
+\begin{lstlisting}[language=C]
+void read_checkpoint(char *checkpoint, Config *config, TransformerWeights *weights,
+                     int *fd, float** data, ssize_t* file_size) {
+    // 1. Fetch metadata and allocate memory
+    // Note: fetch_model_weights handles the UDP communication
+    // and returns a pointer to the fully loaded data in memory.
+    *data = (float*) fetch_model_weights(0); // ID 0 for model
+    if (*data == NULL) {
+        fprintf(2, "Failed to fetch model weights\n");
+        exit(1);
+    }
+
+    // 2. Parse header (Config) from the start of the buffer
+    int *ptr = (int*)(*data);
+    config->dim = ptr[0];
+    config->hidden_dim = ptr[1];
+    config->n_layers = ptr[2];
+    config->n_heads = ptr[3];
+    config->n_kv_heads = ptr[4];
+    config->vocab_size = ptr[5];
+    config->seq_len = ptr[6];
+
+    // 3. Set up weight pointers into the buffer
+    float* w = *data + 7; // Skip header
+    weights->token_embedding_table = w;
+    // ... (rest of weight assignments)
+}
+\end{lstlisting}
+
+\subsubsection{Code Snippet: Updated \texttt{build\_tokenizer}}
+\begin{lstlisting}[language=C]
+void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
+    // Fetch tokenizer data via UDP (ID 1)
+    unsigned char* data = (unsigned char*) fetch_tokenizer(1);
+    
+    t->vocab_size = vocab_size;
+    t->vocab = (char**)calloc(vocab_size, sizeof(char*));
+    
+    // Parse the fetched buffer
+    int offset = 0;
+    for (int i = 0; i < vocab_size; i++) {
+        t->vocab[i] = (char*) (data + offset);
+        int len = strlen(t->vocab[i]);
+        offset += len + 1;
+    }
+}
+\end{lstlisting}
+
+\section{Verification \& Output}
+
+\subsection{Determinism Test}
+\textbf{Command}: \texttt{llm -s 42 -n 16 -i "Once upon a time"}
+
+\textbf{Run 1 Output}:
+\begin{verbatim}
+Once upon a time, there was a little girl named Lily. She loved to play with her...
+\end{verbatim}
+
+\textbf{Run 2 Output}:
+\begin{verbatim}
+Once upon a time, there was a little girl named Lily. She loved to play with her...
+\end{verbatim}
+
+\textit{Observation}: The outputs are identical, confirming that the random number generator (seeded with 42) and the model inference are deterministic.
+
+\subsection{Test Prompt Snippets}
+
+\textbf{Prompt 1}: "Once upon a time"
+\begin{verbatim}
+Once upon a time, there was a little girl named Lily. She loved to play with her friends in the park. One day, she saw a big, red ball...
+\end{verbatim}
+
+\textbf{Prompt 2}: "The tiny dragon"
+\begin{verbatim}
+The tiny dragon was very sad. He wanted to fly, but his wings were too small. "I wish I could fly like the big dragons," he said...
+\end{verbatim}
+
+\textbf{Prompt 3}: "Hello world"
+    \item \textbf{Symptom}: xv6 crashed with \texttt{panic: kerneltrap} and \texttt{scause=0x2} (Illegal Instruction) when running \texttt{llm}.
+    \item \textbf{Root Cause}: The code used the \texttt{rdcycle} assembly instruction, which was not supported or enabled in our QEMU RISC-V configuration.
+    \item \textbf{Solution}: We modified \texttt{kernel/riscv.h} and \texttt{kernel/sysproc.c} to use the \texttt{rdtime} pseudo-instruction instead, which reads the memory-mapped timer and is widely supported.
+\end{itemize}
+
+\subsection{Challenge 3: FPU Page Fault (\texttt{scause=0xf})}
+\begin{itemize}
+    \item \textbf{Symptom}: The \texttt{llm} program crashed with a "store page fault" (\texttt{scause=0xf}) pointing to FPU instructions.
+    \item \textbf{Root Cause}: The RISC-V FPU is disabled by default. When the kernel returns to user mode, the \texttt{sstatus} register's FS (Floating Point Status) bits were set to "Off", causing any floating-point instruction to trap.
+    \item \textbf{Solution}: We modified \texttt{kernel/trap.c} in the \texttt{prepare\_return} function (and \texttt{usertrap}) to explicitly enable the FPU by setting the FS bits to "Initial" (0x1) in \texttt{sstatus} before returning to user mode.
+\end{itemize}
+
+\subsection{Challenge 4: Missing Float Printing}
+\begin{itemize}
+    \item \textbf{Symptom}: The performance metric "tokens per second" was not printing correctly (garbage output).
+    \item \textbf{Root Cause}: The minimal \texttt{printf} implementation in xv6 does not support the \texttt{\%f} format specifier.
+    \item \textbf{Solution}: We implemented a helper function \texttt{print\_float} in \texttt{llm.c} that manually formats the floating-point number into integer and fractional parts for printing.
+\end{itemize}
+
+\section{Conclusion}
+
+\subsection{Summary}
+We successfully ported the \texttt{llama2.c} inference engine to the xv6 operating system. The project demonstrated that a modern, complex workload like an LLM can run on a simple educational OS by overcoming significant constraints in memory, I/O, and standard library support. Key achievements include implementing a UDP-based file loader, enabling hardware floating-point support in the kernel, and adapting the inference code to a bare-bones environment.
+
+\subsection{Readiness for Milestone 5}
+The system is fully ready for Milestone 5. The sequential implementation is verified and robust. The codebase is now set up for parallelization experiments:
+\begin{itemize}
+    \item \textbf{Profiling}: The \texttt{rdcycle} (via \texttt{rdtime}) system call provides the necessary timing infrastructure.
+    \item \textbf{Workload}: The matrix multiplication loops in \texttt{llm.c} are identified as the primary targets for parallelization.
+    \item \textbf{Stability}: The FPU and memory issues have been resolved, providing a stable baseline.
+\end{itemize}
+
+\subsection{Lessons Learned}
+\begin{itemize}
+    \item \textbf{Kernel-User Boundary}: Understanding how the kernel manages hardware state (like FPU) is critical when running non-trivial user programs.
+    \item \textbf{Toolchain Limitations}: Educational OS environments often lack "standard" features (like \texttt{\%f} in printf or \texttt{mmap}), requiring creative workarounds.
+    \item \textbf{Debugging}: Analyzing raw trap causes (\texttt{scause}, \texttt{sepc}) is essential for diagnosing low-level crashes like illegal instructions or unhandled page faults.
+\end{itemize}
+
+\end{document}
