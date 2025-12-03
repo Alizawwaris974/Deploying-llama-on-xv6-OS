@@ -138,3 +138,9 @@ sys_weight_load(void)
 
   return weight_store_get(name, dst, len);
 }
+
+uint64
+sys_rdcycle(void)
+{
+  return r_time();
+}

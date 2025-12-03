@@ -239,9 +239,11 @@ int udp_client_test(void) {
     return 0;
 }
 
+#ifdef UDP_CLIENT_STANDALONE
 int main(int argc, char *argv[]) {
     printf("UDP Client Starting...\n");
     udp_client_test();
     printf("UDP Client Exiting...\n");
     exit(0);
 }
+#endif

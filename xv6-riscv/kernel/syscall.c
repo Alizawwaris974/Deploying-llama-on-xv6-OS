@@ -106,6 +106,7 @@ extern uint64 sys_mkdir(void);
 extern uint64 sys_close(void);
 extern uint64 sys_weight_store(void);
 extern uint64 sys_weight_load(void);
+extern uint64 sys_rdcycle(void);
 
 #ifdef LAB_NET
 extern uint64 sys_bind(void);
@@ -148,6 +149,7 @@ static uint64 (*syscalls[])(void) = {
 #endif
 [SYS_weight_store] sys_weight_store,
 [SYS_weight_load]  sys_weight_load,
+[SYS_rdcycle]      sys_rdcycle,
 };
 
 

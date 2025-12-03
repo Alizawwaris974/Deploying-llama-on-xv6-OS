@@ -158,13 +158,20 @@ $U/sha256_lib.o: $U/sha256.c
 	$(CC) $(CFLAGS) -DSHA256_LIB -c -o $U/sha256_lib.o $U/sha256.c
 
 # 2. Link udp_client with the library version
-$U/_udp_client: $U/udp_client.o $U/sha256_lib.o $(ULIB)
-	$(LD) $(LDFLAGS) -T $U/user.ld -o $U/_udp_client $U/udp_client.o $U/sha256_lib.o $(ULIB)
+$U/udp_client_standalone.o: $U/udp_client.c
+	$(CC) $(CFLAGS) -DUDP_CLIENT_STANDALONE -c -o $U/udp_client_standalone.o $U/udp_client.c
+
+$U/_udp_client: $U/udp_client_standalone.o $U/sha256_lib.o $(ULIB)
+	$(LD) $(LDFLAGS) -T $U/user.ld -o $U/_udp_client $U/udp_client_standalone.o $U/sha256_lib.o $(ULIB)
 	$(OBJDUMP) -S $U/_udp_client > $U/udp_client.asm
 
 $U/_test_runner: $U/test_runner.o $U/test_math.o $U/test_string.o $U/test_stdlib.o $(ULIB)
 	$(LD) $(LDFLAGS) -T $U/user.ld -o $U/_test_runner $U/test_runner.o $U/test_math.o $U/test_string.o $U/test_stdlib.o $(ULIB)
 	$(OBJDUMP) -S $U/_test_runner > $U/test_runner.asm
+
+$U/_llm: $U/llm.o $U/udp_client.o $U/sha256_lib.o $(ULIB)
+	$(LD) $(LDFLAGS) -T $U/user.ld -o $U/_llm $U/llm.o $U/udp_client.o $U/sha256_lib.o $(ULIB)
+	$(OBJDUMP) -S $U/_llm > $U/llm.asm
 
 _%: %.o $(ULIB) $U/user.ld
 	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $< $(ULIB)
@@ -216,7 +223,8 @@ UPROGS=\
 	$U/_fputest\
         $U/_sha256\
 	$U/_udp_client\
-	$U/_test_runner
+	$U/_test_runner\
+	$U/_llm
 #	$U/_test_math\
 #	$U/_xv6_strings\
 #	$U/_tests_stdlib\

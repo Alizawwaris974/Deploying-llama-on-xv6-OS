@@ -42,6 +42,7 @@ void kpgtbl(void);
 #endif
 int weight_store(char*, void*, int);
 int weight_load(char*, void*, int);
+int rdcycle(void);
 
 // ulib.c
 int stat(const char*, struct stat*);

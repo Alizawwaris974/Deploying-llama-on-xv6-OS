@@ -313,6 +313,14 @@ r_time()
   return x;
 }
 
+static inline uint64
+r_cycle()
+{
+  uint64 x;
+  asm volatile("rdtime %0" : "=r" (x) );
+  return x;
+}
+
 // enable device interrupts
 static inline void
 intr_on()

@@ -50,3 +50,4 @@ entry("pgpte");
 entry("kpgtbl");
 entry("weight_store");
 entry("weight_load");
+entry("rdcycle");
