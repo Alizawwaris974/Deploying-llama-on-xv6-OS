@@ -84,6 +84,45 @@ typedef struct {
     ssize_t file_size; // size of the checkpoint file in bytes
 } Transformer;
 
+// ----------------------------------------------------------------------------
+// Benchmarking infrastructure
+
+typedef struct {
+    // Primary metrics
+    long ttft_cycles;
+    long total_cycles;
+    int prompt_tokens;
+    int output_tokens;
+    double tps;
+    
+    // Hotspot timing (accumulated cycles)
+    long matmul_cycles;
+    long activation_cycles;
+    long attention_cycles;
+    long ffn_cycles;
+    long sampling_cycles;
+    
+    // Test configuration
+    char* prompt;
+    float temperature;
+    unsigned long long seed;
+} BenchmarkResults;
+
+// Global timing accumulators for hotspot analysis
+static long g_matmul_cycles = 0;
+static long g_activation_cycles = 0;
+static long g_attention_cycles = 0;
+static long g_ffn_cycles = 0;
+static long g_sampling_cycles = 0;
+
+void reset_benchmark_counters() {
+    g_matmul_cycles = 0;
+    g_activation_cycles = 0;
+    g_attention_cycles = 0;
+    g_ffn_cycles = 0;
+    g_sampling_cycles = 0;
+}
+
 void malloc_run_state(RunState* s, Config* p) {
     // we calloc instead of malloc to keep valgrind happy
     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
@@ -196,7 +235,11 @@ void rmsnorm(float* o, float* x, float* weight, int size) {
     }
     ss /= size;
     ss += 1e-5f;
+    
+    long act_start = rdcycle();
     ss = 1.0f / sqrtf(ss);
+    g_activation_cycles += (rdcycle() - act_start);
+    
     // normalize and scale
     for (int j = 0; j < size; j++) {
         o[j] = weight[j] * (ss * x[j]);
@@ -204,6 +247,8 @@ void rmsnorm(float* o, float* x, float* weight, int size) {
 }
 
 void softmax(float* x, int size) {
+    long act_start = rdcycle();
+    
     // find max value (for numerical stability)
     float max_val = x[0];
     for (int i = 1; i < size; i++) {
@@ -221,11 +266,15 @@ void softmax(float* x, int size) {
     for (int i = 0; i < size; i++) {
         x[i] /= sum;
     }
+    
+    g_activation_cycles += (rdcycle() - act_start);
 }
 
 void matmul(float* xout, float* x, float* w, int n, int d) {
     // W (d,n) @ x (n,) -> xout (d,)
     // by far the most amount of time is spent inside this little function
+    long start = rdcycle();
+    
     int i;
     // #pragma omp parallel for private(i)
     for (i = 0; i < d; i++) {
@@ -235,6 +284,8 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
         }
         xout[i] = val;
     }
+    
+    g_matmul_cycles += (rdcycle() - start);
 }
 
 float* forward(Transformer* transformer, int token, int pos) {
@@ -265,6 +316,9 @@ float* forward(Transformer* transformer, int token, int pos) {
         s->k = s->key_cache + loff + pos * kv_dim;
         s->v = s->value_cache + loff + pos * kv_dim;
 
+        // ATTENTION TIMING START
+        long attn_start = rdcycle();
+        
         // qkv matmuls for this position
         matmul(s->q, s->xb, w->wq + l*dim*dim, dim, dim);
         matmul(s->k, s->xb, w->wk + l*dim*kv_dim, dim, kv_dim);
@@ -329,6 +383,9 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // final matmul to get the output of the attention
         matmul(s->xb2, s->xb, w->wo + l*dim*dim, dim, dim);
+        
+        // ATTENTION TIMING END
+        g_attention_cycles += (rdcycle() - attn_start);
 
         // residual connection back into x
         for (int i = 0; i < dim; i++) {
@@ -338,6 +395,9 @@ float* forward(Transformer* transformer, int token, int pos) {
         // ffn rmsnorm
         rmsnorm(s->xb, x, w->rms_ffn_weight + l*dim, dim);
 
+        // FFN TIMING START
+        long ffn_start = rdcycle();
+        
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
         matmul(s->hb, s->xb, w->w1 + l*dim*hidden_dim, dim, hidden_dim);
@@ -355,6 +415,9 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // final matmul to get the output of the ffn
         matmul(s->xb, s->hb, w->w2 + l*dim*hidden_dim, hidden_dim, dim);
+        
+        // FFN TIMING END
+        g_ffn_cycles += (rdcycle() - ffn_start);
 
         // residual connection
         for (int i = 0; i < dim; i++) {
@@ -710,6 +773,8 @@ float random_f32(unsigned long long *state) { // random float32 in [0,1)
 
 int sample(Sampler* sampler, float* logits) {
     // sample the token given the logits and some hyperparameters
+    long samp_start = rdcycle();
+    
     int next;
     if (sampler->temperature == 0.0f) {
         // greedy argmax sampling: take the token with the highest probability
@@ -730,11 +795,16 @@ int sample(Sampler* sampler, float* logits) {
             next = sample_topp(logits, sampler->vocab_size, sampler->topp, sampler->probindex, coin);
         }
     }
+    
+    g_sampling_cycles += (rdcycle() - samp_start);
     return next;
 }
 
 // ----------------------------------------------------------------------------
 // utilities: time
+
+// CPU frequency for cycle-to-second conversion (10 MHz for QEMU RISC-V virt)
+#define CPU_FREQ 10000000.0
 
 // Helper to print float since printf doesn't support %f
 void print_float(float f) {
@@ -765,6 +835,46 @@ long time_in_ms() {
 }
 
 // ----------------------------------------------------------------------------
+// Benchmark output
+
+void print_benchmark_results(BenchmarkResults* br) {
+    fprintf(2, "\n=== TEST RUN ===\n");
+    fprintf(2, "Prompt: \"%s\"\n", br->prompt);
+    fprintf(2, "Prompt Tokens: %d\n", br->prompt_tokens);
+    fprintf(2, "Output Tokens: %d\n", br->output_tokens);
+    fprintf(2, "Temperature: "); print_float(br->temperature); fprintf(2, "\n");
+    fprintf(2, "Seed: %lld\n", br->seed);
+    
+    fprintf(2, "\nPRIMARY METRICS:\n");
+    double ttft_sec = br->ttft_cycles / CPU_FREQ;
+    double total_sec = br->total_cycles / CPU_FREQ;
+    fprintf(2, "TTFT: %ld cycles (", br->ttft_cycles);
+    print_float(ttft_sec); fprintf(2, " seconds)\n");
+    fprintf(2, "TPS: "); print_float(br->tps); fprintf(2, " tokens/sec\n");
+    fprintf(2, "End-to-End: %ld cycles (", br->total_cycles);
+    print_float(total_sec); fprintf(2, " seconds)\n");
+    
+    fprintf(2, "\nHOTSPOT BREAKDOWN (percent of inference time):\n");
+    // Use total cycles for percentage calculation
+    long total_for_pct = br->total_cycles;
+    if (total_for_pct == 0) total_for_pct = 1; // avoid division by zero
+    
+    double matmul_pct = (br->matmul_cycles * 100.0) / total_for_pct;
+    double act_pct = (br->activation_cycles * 100.0) / total_for_pct;
+    double attn_pct = (br->attention_cycles * 100.0) / total_for_pct;
+    double ffn_pct = (br->ffn_cycles * 100.0) / total_for_pct;
+    double samp_pct = (br->sampling_cycles * 100.0) / total_for_pct;
+    
+    fprintf(2, "matmul(): "); print_float(matmul_pct); fprintf(2, "%%\n");
+    fprintf(2, "Activations (expf, sqrtf): "); print_float(act_pct); fprintf(2, "%%\n");
+    fprintf(2, "Attention: "); print_float(attn_pct); fprintf(2, "%%\n");
+    fprintf(2, "FFN: "); print_float(ffn_pct); fprintf(2, "%%\n");
+    fprintf(2, "Sampling: "); print_float(samp_pct); fprintf(2, "%%\n");
+    fprintf(2, "\nNOTES: Percentages may sum to >100%% due to nested timing (matmul is called within attention/FFN)\n");
+    fprintf(2, "===================\n\n");
+}
+
+// ----------------------------------------------------------------------------
 // generation loop
 
 void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
@@ -781,10 +891,13 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
     }
 
     // start the main loop
-    long start = 0;  // used to time our code, only initialized after first iteration
-    int next;        // will store the next token in the sequence
+    long start_time = rdcycle();  // capture start time in cycles
+    long first_token_time = 0;    // time when first generated token is produced
+    long end_time = 0;            // time when generation completes
+    int generated_tokens = 0;     // count of generated tokens (excluding prompt)
+    int next;                     // will store the next token in the sequence
     int token = prompt_tokens[0]; // kick off with the first token in the prompt
-    int pos = 0;     // position in the sequence
+    int pos = 0;                  // position in the sequence
     while (pos < steps) {
 
         // forward the transformer to get logits for the next token
@@ -797,6 +910,12 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
         } else {
             // otherwise sample the next token from the logits
             next = sample(sampler, logits);
+            generated_tokens++;
+            
+            // capture time when first token is generated (after prompt processing)
+            if (first_token_time == 0) {
+                first_token_time = rdcycle();
+            }
         }
         pos++;
 
@@ -808,21 +927,54 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
         safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
         // fflush(stdout);
         token = next;
-
-        // init the timer here because the first iteration can be slower
-        if (start == 0) { start = time_in_ms(); }
     }
     printf("\n");
 
-    // report achieved tok/s (pos-1 because the timer starts after first iteration)
-    if (pos > 1) {
-        long end = time_in_ms();
-        fprintf(2, "achieved tok/s: ");
-        print_float((pos-1) / (double)(end-start));
-        fprintf(2, "\n");
+    // capture end time
+    end_time = rdcycle();
+
+    // Collect and print benchmark results
+    if (generated_tokens > 0) {
+        BenchmarkResults br;
+        br.prompt = prompt;
+        br.prompt_tokens = num_prompt_tokens;
+        br.output_tokens = generated_tokens;
+        br.temperature = sampler->temperature;
+        br.seed = sampler->rng_state;
+        
+        // Primary metrics
+        br.ttft_cycles = first_token_time - start_time;
+        br.total_cycles = end_time - start_time;
+        
+        // TPS calculation
+        if (generated_tokens > 1) {
+            long generation_cycles = end_time - first_token_time;
+            double generation_time_seconds = generation_cycles / CPU_FREQ;
+            br.tps = (generated_tokens - 1) / generation_time_seconds;
+        } else {
+            br.tps = 0.0;
+        }
+        
+        // Hotspot data (from global accumulators)
+        br.matmul_cycles = g_matmul_cycles;
+        br.activation_cycles = g_activation_cycles;
+        br.attention_cycles = g_attention_cycles;
+        br.ffn_cycles = g_ffn_cycles;
+        br.sampling_cycles = g_sampling_cycles;
+        
+        // Print comprehensive benchmark results
+        print_benchmark_results(&br);
     }
 
     free(prompt_tokens);
+}
+
+void generate_with_reset(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
+    // Reset benchmark counters before generation
+    reset_benchmark_counters();
+    
+    // Run generation with benchmarking
+    generate(transformer, tokenizer, sampler, prompt, steps);
 }
 
 void read_stdin(const char* guide, char* buffer, size_t bufsize) {
@@ -1010,7 +1162,7 @@ int main(int argc, char *argv[]) {
 
     // run!
     if (strcmp(mode, "generate") == 0) {
-        generate(&transformer, &tokenizer, &sampler, prompt, steps);
+        generate_with_reset(&transformer, &tokenizer, &sampler, prompt, steps);
     } else if (strcmp(mode, "chat") == 0) {
         chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, steps);
     } else {
