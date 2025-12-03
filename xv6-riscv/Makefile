@@ -269,7 +269,8 @@ endif
 UPROGS += \
 	$U/_cowtest\
 	$U/_weight_test\
-	$U/_llmtest
+	$U/_llmtest\
+	$U/_ttft_test
 
 ifeq ($(LAB),thread)
 UPROGS += \
