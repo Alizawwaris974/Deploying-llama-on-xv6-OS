@@ -57,7 +57,13 @@ char* fetch_file_by_id(uint8 file_id, int *size_out) {
     meta_req[0] = MSG_METADATA_REQUEST;
     meta_req[1] = file_id;
     
-    char recv_buf[1024 + 16]; // Large enough for headers + chunk
+    int recv_buf_size = 1024 + 16;
+    char *recv_buf = malloc(recv_buf_size); // Large enough for headers + chunk
+    if(!recv_buf) {
+        printf("UDP Client: Malloc failed for recv_buf\n");
+        unbind(client_port);
+        return 0;
+    }
     uint32 file_size = 0, num_chunks = 0;
     unsigned char expected_hash[32];
     int metadata_received = 0;
@@ -80,7 +86,7 @@ char* fetch_file_by_id(uint8 file_id, int *size_out) {
              // API: recv(short dport, int *src, short *sport, char *buf, int maxlen)
              // Note: In strict xv6 lab, recv might block. If it blocks, we rely on the packet arriving.
              // If your recv is non-blocking or returns -1, this loop handles timing.
-             int recv_len = recv(client_port, &src_ip, &src_port, recv_buf, sizeof(recv_buf));
+             int recv_len = recv(client_port, &src_ip, &src_port, recv_buf, recv_buf_size);
              
              if(recv_len > 0) {
                  // Check if it's the right packet
@@ -102,6 +108,7 @@ char* fetch_file_by_id(uint8 file_id, int *size_out) {
     if(!metadata_received) {
         printf("UDP Client: Failed to receive metadata after retries.\n");
         unbind(client_port);
+        free(recv_buf);
         return 0;
     }
 
@@ -118,6 +125,7 @@ char* fetch_file_by_id(uint8 file_id, int *size_out) {
     if(!file_data) {
         printf("UDP Client: Malloc failed for %d bytes\n", file_size);
         unbind(client_port);
+        free(recv_buf);
         return 0;
     }
     
@@ -140,6 +148,7 @@ char* fetch_file_by_id(uint8 file_id, int *size_out) {
                 printf("UDP Client: Max retries exceeded for chunk %d\n", i);
                 free(file_data);
                 unbind(client_port);
+                free(recv_buf);
                 return 0;
             }
 
@@ -152,7 +161,7 @@ char* fetch_file_by_id(uint8 file_id, int *size_out) {
                 uint32 src_ip = 0;
                 uint16 src_port = 0;
                 
-                int len = recv(client_port, &src_ip, &src_port, recv_buf, sizeof(recv_buf));
+                int len = recv(client_port, &src_ip, &src_port, recv_buf, recv_buf_size);
                 
                 if(len > 0) {
                     // Check Header: [Type:1][ID:1][Idx:4][Size:2]
@@ -196,11 +205,13 @@ char* fetch_file_by_id(uint8 file_id, int *size_out) {
         printf("Got: "); for(int k=0;k<4;k++) printf("%x", computed_hash[k]); printf("...\n");
         free(file_data);
         unbind(client_port);
+        free(recv_buf);
         return 0;
     }
 
     printf("UDP Client: Transfer Complete & Verified.\n");
     unbind(client_port);
+    free(recv_buf);
     
     *size_out = file_size;
     return file_data;

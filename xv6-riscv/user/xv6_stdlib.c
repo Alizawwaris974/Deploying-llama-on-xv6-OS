@@ -38,41 +38,39 @@ void* xv6_bsearch (const void* key , const void* base ,int nmemb , int size ,
     return 0;
     }
 
-// QSORT 
+// QSORT (Implemented as iterative Shell Sort to avoid stack overflow)
 void xv6_qsort (void* base , int nmemb , int size ,
     int (* compar)(const void*, const void*)) {
+    
     if (nmemb <= 1) return;
-
-    char* arr = base;
-
-    // Lomuto partition scheme
-    char* pivot = arr + (nmemb - 1) * size;
-    char* i = arr - size;
-
-    for (char* j = arr; j < pivot; j += size) {
-    if (compar(j, pivot) <= 0) {
-    i += size;
-    // Swap i and j
-    for (int k = 0; k < size; k++) {
-    char temp = i[k];
-    i[k] = j[k];
-    j[k] = temp;
-   }
-   }
-   } 
-    // Place pivot in correct position
-    i += size;
-    for (int k = 0; k < size; k++) {
-    char temp = i[k];
-    i[k] = pivot[k];
-    pivot[k] = temp;
+    
+    char* arr = (char*)base;
+    char* temp = malloc(size);
+    if (!temp) return; // Allocation failed
+    
+    // Shell sort with geometric gap sequence
+    for (int gap = nmemb / 2; gap > 0; gap /= 2) {
+        for (int i = gap; i < nmemb; i++) {
+            // temp = arr[i]
+            for (int k = 0; k < size; k++) temp[k] = arr[i * size + k];
+            
+            int j;
+            for (j = i; j >= gap; j -= gap) {
+                // if arr[j - gap] > temp
+                if (compar(arr + (j - gap) * size, temp) > 0) {
+                    // arr[j] = arr[j - gap]
+                    for (int k = 0; k < size; k++) 
+                        arr[j * size + k] = arr[(j - gap) * size + k];
+                } else {
+                    break;
+                }
+            }
+            // arr[j] = temp
+            for (int k = 0; k < size; k++) arr[j * size + k] = temp[k];
+        }
     }
-
-    // Recursively sort partitions
-    int pivot_idx = (i - arr) / size;
-    xv6_qsort (arr , pivot_idx , size , compar);
-    xv6_qsort (i + size , nmemb - pivot_idx - 1, size , compar);
-    }
+    free(temp);
+}
     
 
 // ATOI 

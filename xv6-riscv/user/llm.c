@@ -1102,6 +1102,20 @@ void error_usage() {
     exit(EXIT_FAILURE);
 }
 
+void replace_underscores(char *str) {
+    if (!str) return;
+    for (; *str; str++) {
+        if (*str == '_') *str = ' ';
+    }
+}
+
+
+
+// Global instances to avoid stack overflow (xv6 stack is 4KB)
+Transformer transformer;
+Tokenizer tokenizer;
+Sampler sampler;
+
 int main(int argc, char *argv[]) {
 
     // default parameters
@@ -1148,23 +1162,30 @@ int main(int argc, char *argv[]) {
     if (steps < 0) steps = 0;
 
     // build the Transformer via the model .bin file
-    Transformer transformer;
     build_transformer(&transformer, checkpoint_path);
     if (steps == 0 || steps > transformer.config.seq_len) steps = transformer.config.seq_len; // override to ~max length
 
     // build the Tokenizer via the tokenizer .bin file
-    Tokenizer tokenizer;
     build_tokenizer(&tokenizer, tokenizer_path, transformer.config.vocab_size);
 
     // build the Sampler
-    Sampler sampler;
     build_sampler(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
+
+    // Replace underscores with spaces in prompt to handle xv6 shell limitations
+    // Duplicate prompt to ensure it's writable (in case of string literal)
+    char *writable_prompt = malloc(strlen(prompt) + 1);
+    if(!writable_prompt) {
+        fprintf(2, "malloc failed for prompt\n");
+        exit(EXIT_FAILURE);
+    }
+    strcpy(writable_prompt, prompt);
+    replace_underscores(writable_prompt);
 
     // run!
     if (strcmp(mode, "generate") == 0) {
-        generate_with_reset(&transformer, &tokenizer, &sampler, prompt, steps);
+        generate_with_reset(&transformer, &tokenizer, &sampler, writable_prompt, steps);
     } else if (strcmp(mode, "chat") == 0) {
-        chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, steps);
+        chat(&transformer, &tokenizer, &sampler, writable_prompt, system_prompt, steps);
     } else {
         fprintf(2, "unknown mode: %s\n", mode);
         error_usage();
