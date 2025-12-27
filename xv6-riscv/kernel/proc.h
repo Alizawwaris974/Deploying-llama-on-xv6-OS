@@ -98,6 +98,11 @@ struct proc {
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
 
+  // Thread support fields
+  int is_thread;              // 1 if this is a thread, 0 if process
+  int thread_id;              // unique within process
+  void *stack_base;           // User stack base address
+
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
 
@@ -111,3 +116,7 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 };
+
+// thread constants
+#define NTHREAD 16              // Max threads per process
+#define THREAD_STACK_SIZE 8192  // 8KB per thread stack

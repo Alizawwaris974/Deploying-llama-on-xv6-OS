@@ -124,6 +124,8 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->is_thread = 0;
+  p->thread_id = 0;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -158,8 +160,20 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
-  if(p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
+  
+  if(p->is_thread) {
+    // thread: unmap its specific trapframe mapping from shared pagetable
+    // but do NOT free the pagetable itself.
+    // We must unmap it to allow reuse of this VA slot if needed, 
+    // and to clean up the shared PT.
+    uvmunmap(p->pagetable, TRAPFRAME - (p->thread_id * PGSIZE), 1, 0);
+    p->pagetable = 0; // Just forget the shared pointer
+  } else {
+    // Process: free pagetable
+    if(p->pagetable)
+      proc_freepagetable(p->pagetable, p->sz);
+  }
+  
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -169,6 +183,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->is_thread = 0;
+  p->thread_id = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -687,4 +703,184 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// Create a new thread
+int
+thread_create(uint64 start_routine, uint64 arg)
+{
+  struct proc *np;
+  struct proc *p = myproc();
+  int i;
+  int tid = -1;
+  uint64 sp;
+
+  // Allocate process.
+  if((np = allocproc()) == 0){
+    return -1;
+  }
+
+  // Find a free thread ID (0..NTHREAD-1)
+  // Simple bitmap of TIDs used by siblings.
+  int used[NTHREAD];
+  for(i=0; i<NTHREAD; i++) used[i] = 0;
+  
+  struct proc *pp;
+  for(pp = proc; pp < &proc[NPROC]; pp++){
+    if(pp->state != UNUSED && pp->pagetable == p->pagetable){
+       if(pp->thread_id >= 0 && pp->thread_id < NTHREAD)
+         used[pp->thread_id] = 1;
+    }
+  }
+  
+  for(i=0; i<NTHREAD; i++){
+    if(!used[i]){
+      tid = i;
+      break;
+    }
+  }
+  
+  if(tid < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+
+  np->is_thread = 1;
+  np->thread_id = tid;
+
+  // Unmap the default TRAPFRAME mapping (at MAXVA-PGSIZE)
+  uvmunmap(np->pagetable, TRAPFRAME, 1, 0); 
+  // Unmap TRAMPOLINE (we will remap or it is already in parent PT, logic below)
+  uvmunmap(np->pagetable, TRAMPOLINE, 1, 0); 
+  
+  // Free the empty pagetable pages
+  uvmfree(np->pagetable, 0);
+  
+  // Point to parent's pagetable
+  np->pagetable = p->pagetable;
+  
+  // Map OUR trapframe at unique address
+  if(mappages(np->pagetable, TRAPFRAME - (tid * PGSIZE), PGSIZE,
+              (uint64)(np->trapframe), PTE_R | PTE_W) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  
+  // Allocate user stack on shared heap
+  acquire(&p->lock);
+  uint64 sz = p->sz;
+  sz = PGROUNDUP(sz);
+  uint64 newsz = sz + THREAD_STACK_SIZE; // 2 pages
+  
+  if(uvmalloc(np->pagetable, sz, newsz, PTE_W) == 0){
+    release(&p->lock);
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  p->sz = newsz; 
+  release(&p->lock);
+  
+  np->sz = newsz;
+  np->stack_base = (void*)sz;
+  sp = newsz; // Stack grows down
+
+  // Copy file descriptors
+  for(i = 0; i < NOFILE; i++)
+    if(p->ofile[i])
+      np->ofile[i] = filedup(p->ofile[i]);
+  np->cwd = idup(p->cwd);
+
+  safestrcpy(np->name, p->name, sizeof(p->name));
+
+  // Setup trapframe
+  np->trapframe->epc = start_routine;
+  np->trapframe->sp = sp;
+  np->trapframe->a0 = arg;
+  np->trapframe->ra = 0; // Return address 0
+
+  release(&np->lock);
+
+  acquire(&wait_lock);
+  np->parent = p;
+  release(&wait_lock);
+
+  acquire(&np->lock);
+  np->state = RUNNABLE;
+  release(&np->lock);
+
+  return tid;
+}
+
+// Wait for thread with given ID to exit
+int
+thread_join(int tid)
+{
+  struct proc *pp;
+  struct proc *p = myproc();
+  int havekids;
+
+  acquire(&wait_lock);
+
+  for(;;){
+    // Scan through table looking for exited threads with matching TID
+    // AND sharing our address space (siblings/children)
+    havekids = 0;
+    for(pp = proc; pp < &proc[NPROC]; pp++){
+      if(pp->pagetable == p->pagetable && pp->thread_id == tid && pp != p){
+        acquire(&pp->lock);
+        havekids = 1;
+        if(pp->state == ZOMBIE){
+          // Found matching zombie thread
+          freeproc(pp);
+          release(&pp->lock);
+          release(&wait_lock);
+          return tid;
+        }
+        release(&pp->lock);
+      }
+    }
+
+    if(!havekids || killed(p)){
+      release(&wait_lock);
+      return -1;
+    }
+
+    // Wait for children to exit.
+    sleep(p, &wait_lock);
+  }
+}
+
+void
+thread_exit(void)
+{
+  struct proc *p = myproc();
+  struct proc *pp;
+
+  if(p == initproc)
+    panic("init exiting");
+
+  // Close all open files? NO, shared.
+
+  acquire(&wait_lock);
+
+  // Give any children to init.
+  reparent(p);
+
+  // Wakeup all siblings so join can wake
+  for(pp = proc; pp < &proc[NPROC]; pp++){
+    if(pp->pagetable == p->pagetable){
+      wakeup(pp);
+    }
+  }
+
+  acquire(&p->lock);
+  p->state = ZOMBIE;
+
+  release(&wait_lock);
+
+  sched();
+  panic("zombie exit");
 }

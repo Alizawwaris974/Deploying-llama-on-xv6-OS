@@ -38,3 +38,7 @@
 #define SYS_pgpte     33
 #define SYS_kpgtbl    34
 #define SYS_rdcycle   35
+// Thread system calls
+#define SYS_thread_create 36
+#define SYS_thread_join   37
+#define SYS_thread_exit   38

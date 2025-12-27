@@ -51,3 +51,6 @@ entry("kpgtbl");
 entry("weight_store");
 entry("weight_load");
 entry("rdcycle");
+entry("thread_create");
+entry("thread_join");
+entry("thread_exit");

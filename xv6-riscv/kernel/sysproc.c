@@ -139,6 +139,35 @@ sys_weight_load(void)
   return weight_store_get(name, dst, len);
 }
 
+// for multithreading
+extern int thread_create(uint64, uint64);
+extern int thread_join(int);
+extern void thread_exit(void);
+
+uint64
+sys_thread_create(void)
+{
+  uint64 fcn, arg;
+  argaddr(0, &fcn);
+  argaddr(1, &arg);
+  return thread_create(fcn, arg);
+}
+
+uint64
+sys_thread_join(void)
+{
+  int pid;
+  argint(0, &pid);
+  return thread_join(pid);
+}
+
+uint64
+sys_thread_exit(void)
+{
+  thread_exit();
+  return 0;
+}
+
 uint64
 sys_rdcycle(void)
 {

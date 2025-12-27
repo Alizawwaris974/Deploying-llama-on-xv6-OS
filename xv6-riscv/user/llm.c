@@ -23,7 +23,71 @@ void fprintf(int, const char*, ...);
 #define fabsf xv6_fabsf
 #define ceilf xv6_ceilf
 
-// ----------------------------------------------------------------------------
+
+
+// Thread Pool for Parallelization
+
+#define NUM_THREADS 3  // 1 Main + 2 Workers
+
+typedef struct {
+    int thread_id;
+    int worker_idx;  // 0 or 1 for the two workers
+    volatile int cmd; // 0 = sleep, 1 = work, 2 = exit
+    
+    // Work parameters
+    void (*func)(int, int, float*, float*, float*); 
+    int start_idx;
+    int end_idx;
+    float *arg1, *arg2, *arg3;
+    float *arg4; // for flexibility (e.g. attention scores)
+    int i_arg;
+} WorkerState;
+
+WorkerState workers[NUM_THREADS - 1]; //  only store state for worker threads
+int worker_tids[NUM_THREADS - 1];
+
+void worker_loop(void *arg) {
+    int idx = (int)(long)arg;
+    while(1) {
+        // Spin wait for command
+        while(workers[idx].cmd == 0);
+        
+        if (workers[idx].cmd == 2) break; // Exit
+        
+        // Do work if cmd is 1
+        if (workers[idx].cmd == 1 && workers[idx].func) {
+            workers[idx].func(workers[idx].start_idx, workers[idx].end_idx, 
+                            workers[idx].arg1, workers[idx].arg2, workers[idx].arg3);
+        }
+        
+        // Mark done
+        __sync_synchronize(); // Memory barrier
+        workers[idx].cmd = 0;
+    }
+    thread_exit();
+}
+
+void init_thread_pool() {
+    for(int i = 0; i < NUM_THREADS - 1; i++) {
+        workers[i].worker_idx = i;
+        workers[i].cmd = 0;
+        worker_tids[i] = thread_create(worker_loop, (void*)(long)i);
+        if (worker_tids[i] < 0) {
+            fprintf(2, "Failed to create worker thread %d\n", i);
+            exit(1);
+        }
+    }
+    printf("Initialized Thread Pool with %d workers\n", NUM_THREADS - 1);
+}
+
+void shutdown_thread_pool() {
+    for(int i = 0; i < NUM_THREADS - 1; i++) {
+        workers[i].cmd = 2; // Exit command
+        thread_join(worker_tids[i]);
+    }
+}
+
+
 // Transformer model
 
 typedef struct {
@@ -270,22 +334,117 @@ void softmax(float* x, int size) {
     g_activation_cycles += (rdcycle() - act_start);
 }
 
-void matmul(float* xout, float* x, float* w, int n, int d) {
-    // W (d,n) @ x (n,) -> xout (d,)
-    // by far the most amount of time is spent inside this little function
-    long start = rdcycle();
+
+// Worker function for multi-head attention
+void attention_worker(int start_h, int end_h, float* arg1, float* arg2, float* arg3) {    
+    // Globals for Attention Context
+    Transformer* t = (Transformer*) arg1;
+    int pos = (int)(long)arg2; // Passed as value cast to pointer
     
-    int i;
-    // #pragma omp parallel for private(i)
-    for (i = 0; i < d; i++) {
+    Config* p = &t->config;
+    RunState* s = &t->state;
+    int dim = p->dim;
+    int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
+    int kv_mul = p->n_heads / p->n_kv_heads;
+    int head_size = dim / p->n_heads;
+    int loff = 0;
+    int l = (int)(long)arg3;
+    loff = l * p->seq_len * kv_dim;
+
+    for (int h = start_h; h < end_h; h++) {
+        // get the query vector for this head
+        float* q = s->q + h * head_size;
+        // attention scores for this head
+        float* att = s->att + h * p->seq_len;
+        // iterate over all timesteps, including the current one
+        for (int t = 0; t <= pos; t++) {
+            // get the key vector for this head and at this timestep
+            float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+            // calculate the attention score as the dot product of q and k
+            float score = 0.0f;
+            for (int i = 0; i < head_size; i++) {
+                score += q[i] * k[i];
+            }
+            score /= sqrtf(head_size);
+            // save the score to the attention buffer
+            att[t] = score;
+        }
+
+        // softmax the scores to get attention weights, from 0..pos inclusively
+        softmax(att, pos + 1);
+
+        // weighted sum of the values, store back into xb
+        float* xb = s->xb + h * head_size;
+        memset(xb, 0, head_size * sizeof(float));
+        for (int t = 0; t <= pos; t++) {
+            // get the value vector for this head and at this timestep
+            float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+            // get the attention weight for this timestep
+            float a = att[t];
+            // accumulate the weighted value into xb
+            for (int i = 0; i < head_size; i++) {
+                xb[i] += a * v[i];
+            }
+        }
+    }
+}
+
+
+
+static int g_current_n;
+
+void matmul_worker_func(int start, int end, float* xout, float* x, float* w) {
+    int n = g_current_n;
+    for (int i = start; i < end; i++) {
         float val = 0.0f;
         for (int j = 0; j < n; j++) {
             val += w[i * n + j] * x[j];
         }
         xout[i] = val;
     }
+}
+
+void matmul(float* xout, float* x, float* w, int n, int d) {
+    // W (d,n) @ x (n,) -> xout (d,)
+    long start_cycle = rdcycle();
     
-    g_matmul_cycles += (rdcycle() - start);
+    // Set global n for workers
+    g_current_n = n;
+    
+    int chunk_size = d / NUM_THREADS;
+    
+    // Dispatch to workers [0..NUM_THREADS-2]
+    for (int i = 0; i < NUM_THREADS - 1; i++) {
+        workers[i].func = matmul_worker_func;
+        workers[i].start_idx = (i + 1) * chunk_size;
+        workers[i].end_idx = (i == NUM_THREADS - 2) ? d : (i + 2) * chunk_size; 
+        // Wait, logic:
+        // Main thread: chunk 0.
+        // Worker 0 (idx 0): chunk 1.
+        // Worker 1 (idx 1): chunk 2.
+        
+        // Allow Main to be chunk 0.
+        // Worker 0 gets chunk 1 range.
+        
+        workers[i].arg1 = xout;
+        workers[i].arg2 = x;
+        workers[i].arg3 = w;
+        
+        __sync_synchronize();
+        workers[i].cmd = 1; // Start
+    }
+    
+    // Main thread work (Chunk 0)
+    int main_start = 0;
+    int main_end = chunk_size;
+    matmul_worker_func(main_start, main_end, xout, x, w);
+    
+    // Wait for workers
+    for (int i = 0; i < NUM_THREADS - 1; i++) {
+        while(workers[i].cmd != 0); // Spin wait
+    }
+    
+    g_matmul_cycles += (rdcycle() - start_cycle);
 }
 
 float* forward(Transformer* transformer, int token, int pos) {
@@ -297,7 +456,6 @@ float* forward(Transformer* transformer, int token, int pos) {
     float *x = s->x;
     int dim = p->dim;
     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
-    int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
     int hidden_dim =  p->hidden_dim;
     int head_size = dim / p->n_heads;
 
@@ -342,43 +500,29 @@ float* forward(Transformer* transformer, int token, int pos) {
         }
 
         // multihead attention. iterate over all heads
-        int h;
-        // #pragma omp parallel for private(h)
-        for (h = 0; h < p->n_heads; h++) {
-            // get the query vector for this head
-            float* q = s->q + h * head_size;
-            // attention scores for this head
-            float* att = s->att + h * p->seq_len;
-            // iterate over all timesteps, including the current one
-            for (int t = 0; t <= pos; t++) {
-                // get the key vector for this head and at this timestep
-                float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-                // calculate the attention score as the dot product of q and k
-                float score = 0.0f;
-                for (int i = 0; i < head_size; i++) {
-                    score += q[i] * k[i];
-                }
-                score /= sqrtf(head_size);
-                // save the score to the attention buffer
-                att[t] = score;
-            }
+        // PARALLELIZED
+        int chunk_size = p->n_heads / NUM_THREADS;
+        
+        // Dispatch to workers
+        for(int i = 0; i < NUM_THREADS - 1; i++) {
+            workers[i].func = attention_worker;
+            workers[i].start_idx = (i + 1) * chunk_size;
+            workers[i].end_idx = (i == NUM_THREADS - 2) ? p->n_heads : (i + 2) * chunk_size;
+            
+            workers[i].arg1 = (float*)transformer; // Pass transformer as arg1
+            workers[i].arg2 = (float*)(long)pos;   // Pass pos as value in arg2
+            workers[i].arg3 = (float*)(long)l;     // Pass layer 'l' as value in arg3 (needed for offset)
+            
+            __sync_synchronize();
+            workers[i].cmd = 1;
+        }
 
-            // softmax the scores to get attention weights, from 0..pos inclusively
-            softmax(att, pos + 1);
-
-            // weighted sum of the values, store back into xb
-            float* xb = s->xb + h * head_size;
-            memset(xb, 0, head_size * sizeof(float));
-            for (int t = 0; t <= pos; t++) {
-                // get the value vector for this head and at this timestep
-                float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-                // get the attention weight for this timestep
-                float a = att[t];
-                // accumulate the weighted value into xb
-                for (int i = 0; i < head_size; i++) {
-                    xb[i] += a * v[i];
-                }
-            }
+        // Main thread work (Chunk 0)
+        attention_worker(0, chunk_size, (float*)transformer, (float*)(long)pos, (float*)(long)l);
+        
+        // Wait for workers
+        for(int i = 0; i < NUM_THREADS - 1; i++) {
+             while(workers[i].cmd != 0);
         }
 
         // final matmul to get the output of the attention
@@ -1161,6 +1305,9 @@ int main(int argc, char *argv[]) {
     if (topp < 0.0 || 1.0 < topp) topp = 0.9;
     if (steps < 0) steps = 0;
 
+    // Initialize thread pool (1 main + 2 workers)
+    init_thread_pool();
+
     // build the Transformer via the model .bin file
     build_transformer(&transformer, checkpoint_path);
     if (steps == 0 || steps > transformer.config.seq_len) steps = transformer.config.seq_len; // override to ~max length
@@ -1195,6 +1342,10 @@ int main(int argc, char *argv[]) {
     free_sampler(&sampler);
     free_tokenizer(&tokenizer);
     free_transformer(&transformer);
+    
+    // Shutdown thread pool
+    shutdown_thread_pool();
+    
     return 0;
 }
 #endif

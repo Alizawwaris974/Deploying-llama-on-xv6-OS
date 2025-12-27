@@ -173,6 +173,10 @@ prepare_return(void)
 
   // set S Exception Program Counter to the saved user pc.
   w_sepc(p->trapframe->epc);
+
+  // set sscratch to the user trapframe address
+  uint64 tf = TRAPFRAME - (p->thread_id * PGSIZE);
+  w_sscratch(tf);
 }
 
 // interrupts and exceptions from kernel code go here via kernelvec,

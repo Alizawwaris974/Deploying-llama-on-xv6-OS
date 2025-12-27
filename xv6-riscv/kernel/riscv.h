@@ -185,6 +185,12 @@ r_stvec()
   return x;
 }
 
+static inline void 
+w_sscratch(uint64 x)
+{
+  asm volatile("csrw sscratch, %0" : : "r" (x));
+}
+
 //2a-start
 // Floating-point Control and Status Register (fcsr)
 // Provide read and write helpers for fcsr so kernel can clear/inspect flags.

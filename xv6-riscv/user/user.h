@@ -43,6 +43,14 @@ void kpgtbl(void);
 int weight_store(char*, void*, int);
 int weight_load(char*, void*, int);
 int rdcycle(void);
+int thread_create(void(*)(void*), void*);
+int thread_join(int);
+void thread_exit(void);
+
+// Mutex
+void mutex_init(int*);
+void mutex_lock(int*);
+void mutex_unlock(int*);
 
 // ulib.c
 int stat(const char*, struct stat*);

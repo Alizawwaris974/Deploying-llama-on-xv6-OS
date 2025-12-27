@@ -169,3 +169,25 @@ sbrklazy(int n) {
   return sys_sbrk(n, SBRK_LAZY);
 }
 
+void
+mutex_init(int *mutex)
+{
+  *mutex = 0;
+}
+
+void
+mutex_lock(int *mutex)
+{
+  // Use atomic built-in for test-and-set
+  while(__sync_lock_test_and_set(mutex, 1) != 0)
+      ;
+  __sync_synchronize();
+}
+
+void
+mutex_unlock(int *mutex)
+{
+  __sync_synchronize();
+  __sync_lock_release(mutex);
+}
+

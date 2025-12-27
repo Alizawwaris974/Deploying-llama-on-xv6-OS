@@ -106,14 +106,17 @@ extern uint64 sys_mkdir(void);
 extern uint64 sys_close(void);
 extern uint64 sys_weight_store(void);
 extern uint64 sys_weight_load(void);
-extern uint64 sys_rdcycle(void);
+extern uint64 sys_thread_create(void);
+extern uint64 sys_thread_join(void);
+extern uint64 sys_thread_exit(void);
 
-#ifdef LAB_NET
 extern uint64 sys_bind(void);
 extern uint64 sys_unbind(void);
 extern uint64 sys_send(void);
 extern uint64 sys_recv(void);
-#endif
+extern uint64 sys_pgpte(void);
+extern uint64 sys_kpgtbl(void);
+extern uint64 sys_rdcycle(void);
 
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -150,6 +153,9 @@ static uint64 (*syscalls[])(void) = {
 [SYS_weight_store] sys_weight_store,
 [SYS_weight_load]  sys_weight_load,
 [SYS_rdcycle]      sys_rdcycle,
+[SYS_thread_create] sys_thread_create,
+[SYS_thread_join]   sys_thread_join,
+[SYS_thread_exit]   sys_thread_exit,
 };
 
 
