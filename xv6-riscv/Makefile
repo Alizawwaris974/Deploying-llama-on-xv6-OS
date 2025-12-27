@@ -225,7 +225,8 @@ UPROGS=\
 	$U/_udp_client\
 	$U/_test_runner\
 	$U/_llm\
-	$U/_threadtest
+	$U/_threadtest\
+	$U/_prioritytest
 #	$U/_test_math\
 #	$U/_xv6_strings\
 #	$U/_tests_stdlib\

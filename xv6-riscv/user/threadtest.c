@@ -29,21 +29,31 @@ int main(int argc, char *argv[]) {
   
   mutex_init(&lock);
   
+  mutex_lock(&lock);
   printf("Starting threadtest\n");
+  mutex_unlock(&lock);
   
   t1 = thread_create(increment, (void*)1);
   if(t1 < 0) {
+    mutex_lock(&lock);
     printf("thread_create failed\n");
+    mutex_unlock(&lock);
     exit(1);
   }
+  mutex_lock(&lock);
   printf("Created thread 1, tid=%d\n", t1);
+  mutex_unlock(&lock);
 
   t2 = thread_create(increment, (void*)2);
   if(t2 < 0) {
+    mutex_lock(&lock);
     printf("thread_create failed\n");
+    mutex_unlock(&lock);
     exit(1);
   }
+  mutex_lock(&lock);
   printf("Created thread 2, tid=%d\n", t2);
+  mutex_unlock(&lock);
   
   thread_join(t1);
   printf("Joined thread 1\n");

@@ -147,26 +147,44 @@ extern void thread_exit(void);
 uint64
 sys_thread_create(void)
 {
-  uint64 fcn, arg;
-  argaddr(0, &fcn);
+  uint64 start_routine, arg;
+  argaddr(0, &start_routine);
   argaddr(1, &arg);
-  return thread_create(fcn, arg);
+  return thread_create(start_routine, arg);
 }
 
 uint64
 sys_thread_join(void)
 {
-  int pid;
-  argint(0, &pid);
-  return thread_join(pid);
+  int tid;
+  argint(0, &tid);
+  return thread_join(tid);
 }
 
 uint64
 sys_thread_exit(void)
 {
   thread_exit();
-  return 0;
+  return 0; // not reached
 }
+
+uint64
+sys_set_priority(void)
+{
+  int priority;
+  argint(0, &priority);
+  
+  struct proc *p = myproc();
+  int old_priority = p->priority;
+  
+  acquire(&p->lock);
+  p->priority = priority;
+  release(&p->lock);
+  
+  return old_priority;
+}
+
+
 
 uint64
 sys_rdcycle(void)
