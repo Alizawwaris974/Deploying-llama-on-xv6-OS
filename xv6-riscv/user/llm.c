@@ -391,7 +391,7 @@ void attention_worker(int start_h, int end_h, float* arg1, float* arg2, float* a
 
 
 
-static int g_current_n;
+static volatile int g_current_n;
 
 void matmul_worker_func(int start, int end, float* xout, float* x, float* w) {
     int n = g_current_n;
@@ -410,6 +410,7 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
     
     // Set global n for workers
     g_current_n = n;
+    __sync_synchronize(); // Ensure n is visible
     
     int chunk_size = d / NUM_THREADS;
     
