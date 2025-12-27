@@ -161,17 +161,22 @@ freeproc(struct proc *p)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
   
-  if(p->is_thread) {
-    // thread: unmap its specific trapframe mapping from shared pagetable
-    // but do NOT free the pagetable itself.
-    // We must unmap it to allow reuse of this VA slot if needed, 
-    // and to clean up the shared PT.
-    uvmunmap(p->pagetable, TRAPFRAME - (p->thread_id * PGSIZE), 1, 0);
-    p->pagetable = 0; // Just forget the shared pointer
-  } else {
-    // Process: free pagetable
-    if(p->pagetable)
-      proc_freepagetable(p->pagetable, p->sz);
+  // Unmap our specific trapframe
+  uvmunmap(p->pagetable, TRAPFRAME - (p->thread_id * PGSIZE), 1, 0);
+
+  // Check if we are the last one using this pagetable
+  int sharing = 0;
+  struct proc *pp;
+  for(pp = proc; pp < &proc[NPROC]; pp++){
+    if(pp != p && pp->pagetable == p->pagetable && pp->state != UNUSED){
+      sharing = 1;
+      break;
+    }
+  }
+
+  if(!sharing){
+    // Last one out turns off the lights
+    proc_freepagetable(p->pagetable, p->sz);
   }
   
   p->pagetable = 0;
@@ -185,6 +190,7 @@ freeproc(struct proc *p)
   p->state = UNUSED;
   p->is_thread = 0;
   p->thread_id = 0;
+
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -223,13 +229,21 @@ proc_pagetable(struct proc *p)
 
 // Free a process's page table, and free the
 // physical memory it refers to.
+// Free a process's page table, and free the
+// physical memory it refers to.
 void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
-  uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  
+  // Unmap all potential thread trapframes
+  for(int i = 0; i < NTHREAD; i++){
+    uvmunmap(pagetable, TRAPFRAME - (i * PGSIZE), 1, 0);
+  }
+  
   uvmfree(pagetable, sz);
 }
+
 
 // Set up first user process.
 void
@@ -267,8 +281,18 @@ growproc(int n)
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+
+  // Update all threads sharing the same address space
+  struct proc *pp;
+  for(pp = proc; pp < &proc[NPROC]; pp++){
+    if(pp->pagetable == p->pagetable && pp != p){
+       pp->sz = sz;
+    }
+  }
+
   return 0;
 }
+
 
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
@@ -781,10 +805,19 @@ thread_create(uint64 start_routine, uint64 arg)
     return -1;
   }
   p->sz = newsz; 
+  
+  // Update all threads sharing the same address space
+  for(pp = proc; pp < &proc[NPROC]; pp++){
+    if(pp->pagetable == p->pagetable && pp != p){
+       pp->sz = newsz;
+    }
+  }
+
   release(&p->lock);
   
   np->sz = newsz;
   np->stack_base = (void*)sz;
+
   sp = newsz; // Stack grows down
 
   // Copy file descriptors
