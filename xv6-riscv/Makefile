@@ -225,6 +225,8 @@ UPROGS=\
 	$U/_udp_client\
 	$U/_test_runner\
 	$U/_llm\
+	$U/_run_benchmarks\
+	$U/_analyze\
 	$U/_threadtest\
 	$U/_prioritytest
 #	$U/_test_math\
