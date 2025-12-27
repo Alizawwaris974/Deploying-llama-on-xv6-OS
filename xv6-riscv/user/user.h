@@ -46,6 +46,7 @@ int rdcycle(void);
 int thread_create(void(*)(void*), void*);
 int thread_join(int);
 void thread_exit(void);
+int set_priority(int);
 
 // Mutex
 void mutex_init(int*);

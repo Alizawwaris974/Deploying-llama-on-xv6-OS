@@ -42,3 +42,4 @@
 #define SYS_thread_create 36
 #define SYS_thread_join   37
 #define SYS_thread_exit   38
+#define SYS_set_priority  39

@@ -114,6 +114,7 @@ struct proc {
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
+  int priority;              // Process priority (higher = better)
   char name[16];               // Process name (debugging)
 };
 

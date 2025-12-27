@@ -109,6 +109,7 @@ extern uint64 sys_weight_load(void);
 extern uint64 sys_thread_create(void);
 extern uint64 sys_thread_join(void);
 extern uint64 sys_thread_exit(void);
+extern uint64 sys_set_priority(void);
 
 extern uint64 sys_bind(void);
 extern uint64 sys_unbind(void);
@@ -153,6 +154,10 @@ static uint64 (*syscalls[])(void) = {
 [SYS_weight_store] sys_weight_store,
 [SYS_weight_load]  sys_weight_load,
 [SYS_rdcycle]      sys_rdcycle,
+[SYS_thread_create] sys_thread_create,
+[SYS_thread_join]   sys_thread_join,
+[SYS_thread_exit]   sys_thread_exit,
+[SYS_set_priority]  sys_set_priority,
 [SYS_thread_create] sys_thread_create,
 [SYS_thread_join]   sys_thread_join,
 [SYS_thread_exit]   sys_thread_exit,

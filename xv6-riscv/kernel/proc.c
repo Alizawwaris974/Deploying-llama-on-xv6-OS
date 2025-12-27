@@ -126,6 +126,7 @@ found:
   p->state = USED;
   p->is_thread = 0;
   p->thread_id = 0;
+  p->priority = 10; // Default priority
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -478,23 +479,44 @@ scheduler(void)
     intr_off();
 
     int found = 0;
+
+    // Priority Scheduler
+    struct proc *highest_p = 0;
+    int highest_priority = -1;
+
+    // Find the highest priority RUNNABLE process
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+        if(p->priority > highest_priority) {
+          if(highest_p != 0) {
+            release(&highest_p->lock);
+          }
+          highest_p = p;
+          highest_priority = p->priority;
+          continue; // keep holding lock on highest_p
+        }
       }
       release(&p->lock);
     }
+
+    // Run the best candidate found
+    if(highest_p != 0) {
+      p = highest_p;
+      // p->lock is already held
+      
+      // Switch to chosen process
+      p->state = RUNNING;
+      c->proc = p;
+      swtch(&c->context, &p->context);
+
+      // Process is done running for now.
+      c->proc = 0;
+      highest_p = 0;
+      release(&p->lock);
+      found = 1;
+    }
+    
     if(found == 0) {
       // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
